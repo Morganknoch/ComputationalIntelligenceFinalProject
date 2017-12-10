@@ -19,646 +19,423 @@ import predict_move
 import random
 import math
 import copy
+import time
 
 player_count = 0
 players = []
+first_layer_hidden_weights = (32,90) #32,90
+first_layer_hidden_bias = (1,90) #90
+second_layer_hidden_weights = (90,40) #90,40 
+second_layer_hidden_bias = (1,40) #40
+third_layer_hidden_weights = (40,10) #40,10
+third_layer_hidden_bias = (1,10) #10
 
-class Board(object):
+from copy import deepcopy 
+#1 is black, -1 is white
 
-    global jumps, empty, odd_list
+######################## VARIABLES ########################
 
-    def __init__(self):
-        self.state = pd.read_csv(filepath_or_buffer='board_init.csv', header=-1, index_col=None)
-        self.invalid_attempts = 0
+turn = 'white' # keep track of whose turn it is
+selected = (0, 1) # a tuple keeping track of which piece is selected
+board = 0 # link to our 'main' board
+move_limit = [150, 0] # move limit for each game (declares game as draw otherwise)
 
-    def board_state(self, player_type):
-        if player_type == 'white':
-            return -self.state.iloc[::-1, ::-1]
-        elif player_type == 'black':
-            return self.state
+# artificial intelligence related
+best_move = () # best move for the player as determined by strategy
+black, white = (), () # black and white players
 
-    def print_board(self):
+# gui variables
+window_size = (256, 256) # size of board in pixels
+background_image_filename = 'board_brown.png' # image for the background
+title = 'pyCheckers 1.1.2.3 final' # window title
+board_size = 8 # board is 8x8 squares
+left = 1 # left mouse button
+fps = 5 # framerate of the scene (to save cpu time)
+pause = 5 # number of seconds to pause the game for after end of game
+start = True # are we at the beginnig of the game?
 
-        print('  32  31  30  29')
-        print('28  27  26  25')
-        print('  24  23  22  21')
-        print('20  19  18  17')
-        print('  16  15  14  13')
-        print('12  11  10  09')
-        print('  08  07  06  05')
-        print('04  03  02  01')
-        print('\n')
-        for j in range(8):
-            for i in range(4):
-                if j % 2 == 0:
-                    print(' ', end=""),
-                if self.state[3 - i][7 - j] == 1:
-                    print('x', end=""),
-                elif self.state[3 - i][7 - j] == 3:
-                    print('X', end=""),
-                elif self.state[3 - i][7 - j] == 0:
-                    print('-', end=""),
-                elif self.state[3 - i][7 - j] == -1:
-                    print('o', end=""),
+######################## CLASSES ########################
+
+# class representing piece on the board
+class Piece(object):
+	def __init__(self, color, king):
+		self.color = color
+		self.king = king
+
+# class representing player
+class Player(object):
+	def __init__(self, type, color, strategy, ply_depth):
+		self.type = type # cpu or human
+		self.color = color # black or white
+		self.strategy = strategy # choice of strategy: minimax, negascout, negamax, minimax w/ab
+		self.ply_depth = ply_depth # ply depth for algorithms
+		#self.number = number # ply depth for algorithms
+
+######################## INITIALIZE ########################
+
+# will initialize board with all the pieces
+def init_board():
+	global move_limit
+	move_limit[1] = 0 # reset move limit
+	
+	result = [
+	[ 0, 1, 0, 1, 0, 1, 0, 1],
+	[ 1, 0, 1, 0, 1, 0, 1, 0],
+	[ 0, 1, 0, 1, 0, 1, 0, 1],
+	[ 0, 0, 0, 0, 0, 0, 0, 0],
+	[ 0, 0, 0, 0, 0, 0, 0, 0],
+	[-1, 0,-1, 0,-1, 0,-1, 0],
+	[ 0,-1, 0,-1, 0,-1, 0,-1],
+	[-1, 0,-1, 0,-1, 0,-1, 0]
+	] # initial board setting
+	for m in range(8):
+		for n in range(8):
+			if (result[m][n] == 1):
+				piece = Piece('black', False) # basic black piece
+				result[m][n] = piece
+			elif (result[m][n] == -1):
+				piece = Piece('white', False) # basic white piece
+				result[m][n] = piece
+	return result
+
+# initialize players
+def init_player(type, color, strategy, ply_depth):
+	return Player(type, color, strategy, ply_depth)
+
+######################## FUNCTIONS ########################
+
+# will return array with available moves to the player on board
+def avail_moves(board, player):
+    moves = [] # will store available jumps and moves
+
+    for m in range(8):
+        for n in range(8):
+            if board[m][n] != 0 and board[m][n].color == player: # for all the players pieces...
+                # ...check for jumps first
+                if can_jump([m, n], [m+1, n+1], [m+2, n+2], board) == True: moves.append([m, n, m+2, n+2])
+                if can_jump([m, n], [m-1, n+1], [m-2, n+2], board) == True: moves.append([m, n, m-2, n+2])
+                if can_jump([m, n], [m+1, n-1], [m+2, n-2], board) == True: moves.append([m, n, m+2, n-2])
+                if can_jump([m, n], [m-1, n-1], [m-2, n-2], board) == True: moves.append([m, n, m-2, n-2])
+
+    if len(moves) == 0: # if there are no jumps in the list (no jumps available)
+        # ...check for regular moves
+        for m in range(8):
+            for n in range(8):
+                if board[m][n] != 0 and board[m][n].color == player: # for all the players pieces...
+                    if can_move([m, n], [m+1, n+1], board) == True: moves.append([m, n, m+1, n+1])
+                    if can_move([m, n], [m-1, n+1], board) == True: moves.append([m, n, m-1, n+1])
+                    if can_move([m, n], [m+1, n-1], board) == True: moves.append([m, n, m+1, n-1])
+                    if can_move([m, n], [m-1, n-1], board) == True: moves.append([m, n, m-1, n-1])
+
+    return moves # return the list with available jumps or moves
+                
+# will return true if the jump is legal
+def can_jump(a, via, b, board):
+    # is destination off board?
+    if b[0] < 0 or b[0] > 7 or b[1] < 0 or b[1] > 7:
+        return False
+    # does destination contain a piece already?
+    if board[b[0]][b[1]] != 0: return False
+    # are we jumping something?
+    if board[via[0]][via[1]] == 0: return False
+    # for white piece
+    if board[a[0]][a[1]].color == 'white':
+        if board[a[0]][a[1]].king == False and b[0] > a[0]: return False # only move up
+        if board[via[0]][via[1]].color != 'black': return False # only jump blacks
+        return True # jump is possible
+    # for black piece
+    if board[a[0]][a[1]].color == 'black':
+        if board[a[0]][a[1]].king == False and b[0] < a[0]: return False # only move down
+        if board[via[0]][via[1]].color != 'white': return False # only jump whites
+        return True # jump is possible
+
+# will return true if the move is legal
+def can_move(a, b, board):
+    # is destination off board?
+    if b[0] < 0 or b[0] > 7 or b[1] < 0 or b[1] > 7:
+        return False
+    # does destination contain a piece already?
+    if board[b[0]][b[1]] != 0: return False
+    # for white piece (not king)
+    if board[a[0]][a[1]].king == False and board[a[0]][a[1]].color == 'white':
+        if b[0] > a[0]: return False # only move up
+        return True # move is possible
+    # for black piece
+    if board[a[0]][a[1]].king == False and board[a[0]][a[1]].color == 'black':
+        if b[0] < a[0]: return False # only move down
+        return True # move is possible
+    # for kings
+    if board[a[0]][a[1]].king == True: return True # move is possible
+
+# make a move on a board, assuming it's legit
+def make_move(a, b, board):
+    board[b[0]][b[1]] = board[a[0]][a[1]] # make the move
+    board[a[0]][a[1]] = 0 # delete the source
+    
+    # check if we made a king
+    if b[0] == 0 and board[b[0]][b[1]].color == 'white': board[b[0]][b[1]].king = True
+    if b[0] == 7 and board[b[0]][b[1]].color == 'black': board[b[0]][b[1]].king = True
+    
+    if (a[0] - b[0]) % 2 == 0: # we made a jump...
+        board[int((a[0]+b[0])/2)][int((a[1]+b[1])/2)] = 0 # delete the jumped piece
+
+######################## CORE FUNCTIONS ########################
+
+def evaluate(number, board, player):
+
+    new_board = []
+    
+    # will evaluate board for a player
+    #send modified board to NN
+    #if player is white, do flip the board
+    if player == 'white':
+        for i in range(7,-1,-1):
+            #new_row = []
+            for j in range(7,-1,-1):
+                if i % 2 == 0 and j % 2 == 0:
+                    pass
+                elif i % 2 == 1 and j%2 ==1:
+                    pass
                 else:
-                    print('O', end=""),
-                if j % 2 != 0:
-                    print(' ', end=""),
-            print('')
-
-    def find_jumps(self, player_type):
-
-        valid_jumps = list()
-
-        if player_type == 'black':
-            king_value = black_king
-            chkr_value = black_chkr
-            chkr_directions = [1, 2]
-        else:
-            king_value = white_king
-            chkr_value = white_chkr
-            chkr_directions = [0, 3]
-
-        board_state = self.state.as_matrix()
-        board_state = np.reshape(board_state, (32,))
-
-        for position in range(32):
-            piece = board_state[position]
-            neighbors_list = neighbors[position]
-            next_neighbors_list = next_neighbors[position]
-
-            if piece == chkr_value:
-                for direction in chkr_directions:
-                    neighbor = neighbors_list[direction]
-                    next_neighbor = next_neighbors_list[direction]
-                    if neighbor == iv or next_neighbor == iv:
-                        pass
-                    elif board_state[next_neighbor] == empty and (board_state[neighbor] == -chkr_value or board_state[neighbor] == -king_value):
-                        valid_jumps.append([position, next_neighbor])
-
-            elif piece == king_value:
-                for direction in range(4):
-                    neighbor = neighbors_list[direction]
-                    next_neighbor = next_neighbors_list[direction]
-                    if neighbor == iv or next_neighbor == iv:
-                        pass
-                    elif board_state[next_neighbor] == empty and (board_state[neighbor] == -chkr_value or board_state[neighbor] == -king_value):
-                        valid_jumps.append([position, next_neighbor])
-
-        print(valid_jumps)
-        return valid_jumps
-
-    def get_positions(self, move, player_type):
-
-        # Extract starting position, and direction to move
-        ind = np.argwhere(move == 1)[0]
-        position = ind[0]
-        direction = ind[1]
-
-        jumps_available = self.find_jumps(player_type=player_type)
-
-        neighbor = neighbors[position][direction]
-        next_neighbor = next_neighbors[position][direction]
-
-        if [position, next_neighbor] in jumps_available:
-            return position, next_neighbor, 'jump'
-        else:
-            return position, neighbor, 'standard'
-
-    def generate_move(self, playernum, player_type, output_type):
-
-        board_state = self.state
-        if playernum != -1:
-            holddir = player_dir + str(playernum) + 'model.ckpt'
-            moves, probs = predict_move.predict_cnn(board_state, output=output_type, params_dir=holddir)
-        else:
-            moves, probs = predict_move.predict_cnn(board_state, output=output_type, params_dir=params_dir)
-        moves_list = list()
-
-        for i in range(1, 6):
-            ind = np.argwhere(moves == i)[0]
-            move = np.zeros([32, 4])
-            move[ind[0], ind[1]] = 1
-            pos_init, pos_final, move_type = self.get_positions(move, player_type=player_type)
-            moves_list.append([pos_init, pos_final])
-
-        return moves_list, probs
-
-    def update(self, positions, player_type, move_type):
-
-        # Extract the initial and final positions into ints
-        pos_init, pos_final = positions[0], positions[1]
-
-        if pos_init == '' or pos_final == '':
-            return True
-
-        if player_type == 'black':
-            king_pos = black_king_pos
-            king_value = black_king
-            chkr_value = black_chkr
-            pos_init, pos_final = int(pos_init), int(pos_final)
-        else:
-            king_pos = white_king_pos
-            king_value = white_king
-            chkr_value = white_chkr
-            pos_init, pos_final = int(pos_init) - 1, int(pos_final) - 1
-
-        # print(pos_init, pos_final)
-        board_vec = self.state.copy()
-        board_vec = np.reshape(board_vec.as_matrix(), (32,))
-
-        if (board_vec[pos_init] == chkr_value or board_vec[pos_init] == king_value) and board_vec[pos_final] == empty:
-            board_vec[pos_final] = board_vec[pos_init]
-            board_vec[pos_init] = empty
-
-            # Assign kings
-            if pos_final in king_pos:
-                board_vec[pos_final] = king_value
-
-            # Remove eliminated pieces
-            if move_type == 'jump':
-                eliminated = int(jumps.iloc[pos_init, pos_final])
-                print('Position eliminated: %d' % (eliminated + 1))
-                assert board_vec[eliminated] == -chkr_value or -king_value
-                board_vec[eliminated] = empty
-
-            # Update the board
-            board_vec = pd.DataFrame(np.reshape(board_vec, (8, 4)))
-            self.state = board_vec
-            return False
-
-        else:
-            return True
-
-if __name__ == '__main__':
-    # Define board entries and valid positions
-    empty = 0
-    black_chkr = 1
-    black_king = 3
-    black_king_pos = [28, 29, 30, 31]
-    white_chkr = -black_chkr
-    white_king = -black_king
-    white_king_pos = [0, 1, 2, 3]
-    valid_positions = range(32)
-    odd_list = [0, 1, 2, 3, 8, 9, 10, 11, 16, 17, 18, 19, 24, 25, 26, 27]
-    even_list = [4, 5, 6, 7, 12, 13, 14, 15, 20, 21, 22, 23, 28, 29, 30, 31]
-    jumps = pd.read_csv(filepath_or_buffer='jumps.csv', header=-1, index_col=None)
-    params_dir = 'parameters/convnet_150k_full/model.ckpt-150001'
-    player_dir = 'test_players/'
-    # Entries for neighbors are lists, with indices corresponding to direction as defined in parser_v7.py ...
-    iv = ''
-    neighbors = {0: [iv, 5, 4, iv],
-                 1: [iv, 6, 5, iv],
-                 2: [iv, 7, 6, iv],
-                 3: [iv, iv, 7, iv],
-                 4: [0, 8, iv, iv],
-                 5: [1, 9, 8, 0],
-                 6: [2, 10, 9, 1],
-                 7: [3, 11, 10, 2],
-                 8: [5, 13, 12, 4],
-                 9: [6, 14, 13, 5],
-                 10: [7, 15, 14, 6],
-                 11: [iv, iv, 15, 7],
-                 12: [8, 16, iv, iv],
-                 13: [9, 17, 16, 8],
-                 14: [10, 18, 17, 9],
-                 15: [11, 19, 18, 10],
-                 16: [13, 21, 20, 12],
-                 17: [14, 22, 21, 13],
-                 18: [15, 23, 22, 14],
-                 19: [iv, iv, 23, 15],
-                 20: [16, 24, iv, iv],
-                 21: [17, 25, 24, 16],
-                 22: [18, 26, 25, 17],
-                 23: [19, 27, 26, 18],
-                 24: [21, 29, 28, 20],
-                 25: [22, 30, 29, 21],
-                 26: [23, 31, 30, 22],
-                 27: [iv, iv, 31, 23],
-                 28: [24, iv, iv, iv],
-                 29: [25, iv, iv, 24],
-                 30: [26, iv, iv, 25],
-                 31: [27, iv, iv, 26]
-                 }
-
-    next_neighbors = {0: [iv, 9, iv, iv],
-                      1: [iv, 10, 8, iv],
-                      2: [iv, 11, 9, iv],
-                      3: [iv, iv, 10, iv],
-                      4: [iv, 13, iv, iv],
-                      5: [iv, 14, 12, iv],
-                      6: [iv, 15, 13, iv],
-                      7: [iv, iv, 14, iv],
-                      8: [1, 17, iv, iv],
-                      9: [2, 18, 16, 0],
-                      10: [3, 19, 17, 1],
-                      11: [iv, iv, 18, 2],
-                      12: [5, 21, iv, iv],
-                      13: [6, 22, 20, 4],
-                      14: [7, 23, 21, 5],
-                      15: [iv, iv, 22, 6],
-                      16: [9, 25, iv, iv],
-                      17: [10, 26, 24, 8],
-                      18: [11, 27, 25, 9],
-                      19: [iv, iv, 26, 10],
-                      20: [13, 29, iv, iv],
-                      21: [14, 30, 28, 12],
-                      22: [15, 31, 29, 13],
-                      23: [iv, iv, 30, 14],
-                      24: [17, iv, iv, iv],
-                      25: [18, iv, iv, 16],
-                      26: [19, iv, iv, 17],
-                      27: [iv, iv, iv, 18],
-                      28: [21, iv, iv, iv],
-                      29: [22, iv, iv, 20],
-                      30: [23, iv, iv, 21],
-                      31: [iv, iv, iv, 22]
-                      }
-
-
-def evolutionary_play(player1, player2):
-
-    # Alpha-numeric encoding of player turn: white = 1, black = -1
-    turn = -1
-
-    # Count number of invalid move attempts
-    invalid_move_attempts = 0
-    jumps_not_predicted = 0
-    move_count = 0
-    game_aborted = False
-
-    player1num = player1.number
-    player2num = player2.number
-
-    # Initialize board object
-    board = Board()
-
-    #print('====================================================================================================================================================')
-    #print('CNN Checkers Engine')
-    #print('Created by Chris Larson')
-    #print('All Rights Reserved (2016)')
-    #print('\n')
-    #print('You are playing the white pieces, computer is playing black.')
-    #print('There is no GUI for this game. Feel free to run an external program in 2-player mode alongside this game.')
-    #print('\n')
-    #print('Procedure:')
-    #print('1. The computer generates its own moves and prints them to the screen. The user can execute these moves in an external program.')
-    #print("2. The computer will then prompt the user to enter a sequence of board positions separated by a comma, indicating the move they want to make.")
-    #print("For example, the entry '7, 10' would indicate moving the piece located at position 7 to position 10. The entry '7, 14, 23' would")
-    #print("indicate a mulitiple-jump move by the piece located at position 7 eliminating the opposing checkers at positions 10 and 18.")
-    #print("3. To end the game, specify the result as follows: 'black wins' for a black win, 'white wins' for a white win, or 'draw' for a draw.")
-    #print('\n')
-
-    # Start game
-    #raw_input("To begin, press Enter:")
-    end_game = False
-    winner = ''
-    while True:
-
-        # White turn, player1
-        if turn == 1:
-            board.print_board()
-            player_type = 'white'
-
-
-
-            # Call model to generate move
-            moves_list, probs = board.generate_move(playernum = player1num, player_type=player_type, output_type='top-5')
-            #print(np.array(moves_list) + 1)
-            print(probs)
-
-            # Check for available jumps, cross check with moves
-            available_jumps = board.find_jumps(player_type=player_type)
-
-            first_move = True
-
-            # Handles situation where there is a jump available to black
-            if len(available_jumps) > 0:
-
-                move_type = 'jump'
-                jump_available = True
-
-                while jump_available:
-
-                    # For one jump available
-                    if len(available_jumps) == 1:
-                        count = 1
-                        move_predicted = False
-
-                        for move in moves_list:
-                            if move == available_jumps[0]:
-                                # print("There is one jump available. This move was choice %d." % count)
-                                move_predicted = True
-                                break
+                    if board[i][j] != 0:
+                        if board[i][j].color == 'black':
+                            if board[i][j].king == True:
+                                new_board.append(-3)
                             else:
-                                count += 1
-
-                        if not move_predicted:
-                            # print('Model did not output the available jumps. Forced move.')
-                            jumps_not_predicted += 1
-
-                        initial_position = available_jumps[0][0]
-                        if not (first_move or final_position == initial_position):
-                            break
-                        final_position = available_jumps[0][1]
-                        initial_piece = np.reshape(board.state.as_matrix(), (32,))[initial_position]
-                        move_illegal = board.update(available_jumps[0], player_type=player_type, move_type=move_type)
-
-                        if move_illegal:
-                            # print('Find Jumps function returned invalid move: %s' % (np.array(available_jumps[0]) + 1))
-                            game_aborted = True
-                            player1.score -=2
+                                new_board.append(-1)
                         else:
-                            print("Black move: %s" % (np.array(available_jumps[0]) + 1))
-                            available_jumps = board.find_jumps(player_type=player_type)
-                            final_piece = np.reshape(board.state.as_matrix(), (32,))[final_position]
-                            if len(available_jumps) == 0 or final_piece != initial_piece:
-                                jump_available = False
-
-                    # When diffent multiple jumps are available
+                            if board[i][j].king == True:
+                                new_board.append(3)
+                            else:
+                                new_board.append(1)
                     else:
-                        move_predicted = False
-                        for move in moves_list:
-                            if move in available_jumps:
-
-                                initial_position = move[0]
-                                if not (first_move or final_position == initial_position):
-                                    break
-                                final_position = move[1]
-                                initial_piece = np.reshape(board.state.as_matrix(), (32,))[initial_position]
-                                move_illegal = board.update(move, player_type=player_type, move_type=move_type)
-
-                                if move_illegal:
-                                    pass
-                                    # print('Model and Find jumps function predicted an invalid move: %s' % (np.array(move) + 1))
-                                else:
-                                    print("Black move: %s" % (np.array(move) + 1))
-                                    move_predicted = True
-                                    available_jumps = board.find_jumps(player_type=player_type)
-                                    final_piece = np.reshape(board.state.as_matrix(), (32,))[final_position]
-                                    if len(available_jumps) == 0 or final_piece != initial_piece:
-                                        jump_available = False
-                                    break
-
-                        if not move_predicted:
-                            # print('Model did not output any of the available jumps. Move picked randomly among valid options.')
-                            jumps_not_predicted += 1
-                            ind = np.random.randint(0, len(available_jumps))
-
-                            initial_position = available_jumps[ind][0]
-                            if not (first_move or final_position == initial_position):
-                                break
-                            final_position = available_jumps[ind][1]
-                            initial_piece = np.reshape(board.state.as_matrix(), (32,))[initial_position]
-                            move_illegal = board.update(available_jumps[ind], player_type=player_type, move_type=move_type)
-
-                            if move_illegal:
-                                # print('Find Jumps function returned invalid move: %s' % (np.array(available_jumps[ind]) + 1))
-                                game_aborted = True 
-                                player1.score -=2
-                            else:
-                                available_jumps = board.find_jumps(player_type=player_type)
-                                final_piece = np.reshape(board.state.as_matrix(), (32,))[final_position]
-                                if len(available_jumps) == 0 or final_piece != initial_piece:
-                                    jump_available = False
-
-                    first_move = False
-
-
-            # For standard moves
-            else:
-                move_type = 'standard'
-                move_illegal = True
-                while move_illegal:
-
-                    count = 1
-                    for move in moves_list:
-
-                        move_illegal = board.update(move, player_type=player_type, move_type=move_type)
-
-                        if move_illegal:
-                            # print('model predicted invalid move (%s)' % (np.array(move) + 1))
-                            print(probs[count - 1])
-                            invalid_move_attempts += 1
-                            count += 1
-                        else:
-                            print('Black move: %s' % (np.array(move) + 1))
-                            break
-
-                    if move_illegal:
-                        game_aborted = True
-                        player1.score -=2
-                        print("The model failed to provide a valid move. Game aborted.")
-                        #print(np.array(moves_list) + 1)
-                        print(probs)
-                        break
-
-            
-            try:
-                move[::-1][:4][::-1]
-            except:
-                pass
-            else:
-                if move[::-1][:4][::-1] == 'wins':
-                    winner = 'black'
-                    end_game = True
-                    break
-                elif move == 'draw':
-                    winner = 'draw'
-                    end_game = True
-                    break
-
-
-
-
-        # Black turn
-        elif turn == -1:
-
-            print('\n' * 2)
-            print('=======================================================')
-            print("Black's turn")
-            board.print_board()
-            player_type = 'black'
-
-            # Call model to generate move
-            moves_list, probs = board.generate_move(playernum = player2num, player_type=player_type, output_type='top-5')
-            #print(np.array(moves_list) + 1)
-            print(probs)
-
-            # Check for available jumps, cross check with moves
-            available_jumps = board.find_jumps(player_type=player_type)
-
-            first_move = True
-
-            # Handles situation where there is a jump available to black
-            if len(available_jumps) > 0:
-
-                move_type = 'jump'
-                jump_available = True
-
-                while jump_available:
-
-                    # For one jump available
-                    if len(available_jumps) == 1:
-                        count = 1
-                        move_predicted = False
-
-                        for move in moves_list:
-                            if move == available_jumps[0]:
-                                # print("There is one jump available. This move was choice %d." % count)
-                                move_predicted = True
-                                break
-                            else:
-                                count += 1
-
-                        if not move_predicted:
-                            # print('Model did not output the available jumps. Forced move.')
-                            jumps_not_predicted += 1
-
-                        initial_position = available_jumps[0][0]
-                        if not (first_move or final_position == initial_position):
-                            break
-                        final_position = available_jumps[0][1]
-                        initial_piece = np.reshape(board.state.as_matrix(), (32,))[initial_position]
-                        move_illegal = board.update(available_jumps[0], player_type=player_type, move_type=move_type)
-
-                        if move_illegal:
-                            # print('Find Jumps function returned invalid move: %s' % (np.array(available_jumps[0]) + 1))
-                            game_aborted = True
-                            player2.score -=2
-                        else:
-                            print("Black move: %s" % (np.array(available_jumps[0]) + 1))
-                            available_jumps = board.find_jumps(player_type=player_type)
-                            final_piece = np.reshape(board.state.as_matrix(), (32,))[final_position]
-                            if len(available_jumps) == 0 or final_piece != initial_piece:
-                                jump_available = False
-
-                    # When diffent multiple jumps are available
-                    else:
-                        move_predicted = False
-                        for move in moves_list:
-                            if move in available_jumps:
-
-                                initial_position = move[0]
-                                if not (first_move or final_position == initial_position):
-                                    break
-                                final_position = move[1]
-                                initial_piece = np.reshape(board.state.as_matrix(), (32,))[initial_position]
-                                move_illegal = board.update(move, player_type=player_type, move_type=move_type)
-
-                                if move_illegal:
-                                    pass
-                                    # print('Model and Find jumps function predicted an invalid move: %s' % (np.array(move) + 1))
-                                else:
-                                    print("Black move: %s" % (np.array(move) + 1))
-                                    move_predicted = True
-                                    available_jumps = board.find_jumps(player_type=player_type)
-                                    final_piece = np.reshape(board.state.as_matrix(), (32,))[final_position]
-                                    if len(available_jumps) == 0 or final_piece != initial_piece:
-                                        jump_available = False
-                                    break
-
-                        if not move_predicted:
-                            # print('Model did not output any of the available jumps. Move picked randomly among valid options.')
-                            jumps_not_predicted += 1
-                            ind = np.random.randint(0, len(available_jumps))
-
-                            initial_position = available_jumps[ind][0]
-                            if not (first_move or final_position == initial_position):
-                                break
-                            final_position = available_jumps[ind][1]
-                            initial_piece = np.reshape(board.state.as_matrix(), (32,))[initial_position]
-                            move_illegal = board.update(available_jumps[ind], player_type=player_type, move_type=move_type)
-
-                            if move_illegal:
-                                # print('Find Jumps function returned invalid move: %s' % (np.array(available_jumps[ind]) + 1))
-                                game_aborted = True
-                                player2.score -=2
-                            else:
-                                available_jumps = board.find_jumps(player_type=player_type)
-                                final_piece = np.reshape(board.state.as_matrix(), (32,))[final_position]
-                                if len(available_jumps) == 0 or final_piece != initial_piece:
-                                    jump_available = False
-
-                    first_move = False
-
-            # For standard moves
-            else:
-                move_type = 'standard'
-                move_illegal = True
-                while move_illegal:
-
-                    count = 1
-                    for move in moves_list:
-
-                        move_illegal = board.update(move, player_type=player_type, move_type=move_type)
-
-                        if move_illegal:
-                            # print('model predicted invalid move (%s)' % (np.array(move) + 1))
-                            print(probs[count - 1])
-                            invalid_move_attempts += 1
-                            count += 1
-                        else:
-                            print('Black move: %s' % (np.array(move) + 1))
-                            break
-
-                    if move_illegal:
-                        game_aborted = True
-                        print("The model failed to provide a valid move. Game aborted.")
-                        player2.score -=2
-                        #print(np.array(moves_list) + 1)
-                        print(probs)
-                        break
-            try:
-                if move[::-1][:4][::-1] == 'wins':
-                    winner = 'black'
-                    end_game = True
-                    break
-
-                elif move == 'draw':
-                    winner = 'draw'
-                    end_game = True
-                    break
-            except:
-                pass
-
-        if game_aborted:
-            print('Game aborted.')
-            break
-
-        if end_game:
-            print('The game has ended')
-            break
-        move_count += 1
-        turn *= -1
-
-    # Print out game stats
-    end_board = board.state.as_matrix()
-    num_black_chkr = len(np.argwhere(end_board == black_chkr))
-    num_black_king = len(np.argwhere(end_board == black_king))
-    num_white_chkr = len(np.argwhere(end_board == white_chkr))
-    num_white_king = len(np.argwhere(end_board == white_king))
-    if winner == 'draw':
-        print('The game ended in a draw.')
-    elif winner == 'white':
-        #first player won
-        player1.score +=1
-        player2.score -=2
+                        new_board.append(0)
+            #new_board.append(new_row)
     else:
-        player1.score -=2
-        player2.score +=1
-    print('Total number of moves: %d' % move_count)
-    print('Remaining white pieces: (checkers: %d, kings: %d)' % (num_white_chkr, num_white_king))
-    print('Remaining black pieces: (checkers: %d, kings: %d)' % (num_black_chkr, num_black_king))
+        for i in range(8):
+            #new_row = []
+            for j in range(8):
+                if i % 2 == 0 and j % 2 == 0:
+                    pass
+                elif i % 2 == 1 and j%2 ==1:
+                    pass
+                else:
+                    if board[i][j] != 0:
+                        if board[i][j].color == 'white':
+                            if board[i][j].king == True:
+                                new_board.append(-3)
+                            else:
+                                new_board.append(-1)
+                        else:
+                            if board[i][j].king == True:
+                                new_board.append(3)
+                            else:
+                                new_board.append(1)
+                    else:
+                        new_board.append(0)
+
+    new_board = np.array(new_board)
+    new_board.shape = (1,32)
+
+    eval = predict_move.predict_nn(new_board, players[number])
+
+    return eval
+
+# have we killed the opponent already?
+def end_game(board):
+	black, white = 0, 0 # keep track of score
+	for m in range(8):
+		for n in range(8):
+			if board[m][n] != 0:
+				if board[m][n].color == 'black': black += 1 # we see a black piece
+				else: white += 1 # we see a white piece
+
+	return black, white
 
 
-#play()
+''' alpha-beta(player,board,alpha,beta) '''
+def alpha_beta(number, player, board, ply, alpha, beta):
+	global best_move
+
+	# find out ply depth for player
+	ply_depth = 0
+	if player != 'black': ply_depth = white.ply_depth
+	else: ply_depth = black.ply_depth
+
+	end = end_game(board)
+
+	''' if(game over in current board position) '''
+	if ply >= ply_depth or end[0] == 0 or end[1] == 0: # are we still playing?
+		''' return winner '''
+		score = evaluate(number, board, player) # return evaluation of board as we have reached final ply or end state
+		return score
+
+	''' children = all legal moves for player from this board '''
+	moves = avail_moves(board, player) # get the available moves for player
+
+	''' if(max's turn) '''
+	if player == turn: # if we are to play on node...
+		''' for each child '''
+		for i in range(len(moves)):
+			# create a deep copy of the board (otherwise pieces would be just references)
+			new_board = deepcopy(board)
+			make_move((moves[i][0], moves[i][1]), (moves[i][2], moves[i][3]), new_board) # make move on new board
+
+			''' score = alpha-beta(other player,child,alpha,beta) '''
+			# ...make a switch of players for minimax...
+			if player == 'black': player = 'white'
+			else: player = 'black'
+
+			score = alpha_beta(number,player, new_board, ply+1, alpha, beta)
+
+			''' if score > alpha then alpha = score (we have found a better best move) '''
+			if score > alpha:
+				if ply == 0: best_move = (moves[i][0], moves[i][1]), (moves[i][2], moves[i][3]) # save the move
+				alpha = score
+			''' if alpha >= beta then return alpha (cut off) '''
+			if alpha >= beta:
+				#if ply == 0: best_move = (moves[i][0], moves[i][1]), (moves[i][2], moves[i][3]) # save the move
+				return alpha
+
+		''' return alpha (this is our best move) '''
+		return alpha
+
+	else: # the opponent is to play on this node...
+		''' else (min's turn) '''
+		''' for each child '''
+		for i in range(len(moves)):
+			# create a deep copy of the board (otherwise pieces would be just references)
+			new_board = deepcopy(board)
+			make_move((moves[i][0], moves[i][1]), (moves[i][2], moves[i][3]), new_board) # make move on new board
+
+			''' score = alpha-beta(other player,child,alpha,beta) '''
+			# ...make a switch of players for minimax...
+			if player == 'black': player = 'white'
+			else: player = 'black'
+
+			score = alpha_beta(number,player, new_board, ply+1, alpha, beta)
+
+			''' if score < beta then beta = score (opponent has found a better worse move) '''
+			if score < beta: beta = score
+			''' if alpha >= beta then return beta (cut off) '''
+			if alpha >= beta: return beta
+		''' return beta (this is the opponent's best move) '''
+		return beta
+
+# end turn
+def end_turn():
+	global turn # use global variables
+
+	if turn != 'black':	turn = 'black'
+	else: turn = 'white'
+
+# play as a computer
+def cpu_play(number, player):
+	global board, move_limit # global variables
+    # find and print the best move for cpu
+
+	if player.strategy == 'alpha-beta': alpha = alpha_beta(number, player.color, board, 0, -10000, +10000)
+	end_turn()
+
+
+	if alpha == -10000: # no more moves available... all is lost
+		if player.color == white: return -1     
+		else: return -1
+
+
+	make_move(best_move[0], best_move[1], board) # make the move on board
+
+# initialize players and the boardfor the game
+def game_init(ply):
+	global black, white # work with global variables
+
+
+	black = init_player('cpu', 'black', 'alpha-beta', ply) # init black player
+	white = init_player('cpu', 'white', 'alpha-beta', ply) # init white player
+	board = init_board()
+
+	return board			
+
+######################## START OF GAME ########################
+
+def play_game(player1, player2):
+    global board
+
+    board = game_init(2) # initialize players and board for the game
+    hold1 = 0
+    hold2 = 0
+    white_lost = False  
+    black_lost = False
+    while True:
+        end = end_game(board)
+        print_board(board)
+        if end[1] == 0 or white_lost:	
+            # black wins
+            player1.score += 1
+            player2.score -= 2
+            print('Black won')
+            break
+        elif end[0] == 0 or black_lost: 
+            # white wins
+            player1.score -= 2
+            player2.score += 1
+            print('White won')
+            break
+	    # check if we breached the threshold for number of moves	
+        elif move_limit[0] == move_limit[1]: 
+            #draw, do nothing 
+            print('It was a draw')
+            break
+	    # cpu play	
+        if turn != 'black' and white.type == 'cpu' and (hold1 != -1 or hold2 != -1): 
+            hold1 = cpu_play(player2.number, white) # white cpu turn
+            move_limit[1] += 1 # add to move limit
+            print('White made a move')
+            if hold1 == -1:
+                white_lost = True
+        elif turn != 'white' and black.type == 'cpu' and (hold1 != -1 or hold2 != -1): 
+            hold2 = cpu_play(player1.number, black) # black cpu turn
+            move_limit[1] += 1 # add to move limit
+            print('Black made a move')
+            if hold2 == -1:
+                black_lost = True
+
+def print_board(board):
+
+    for i in range(8):
+        for j in range(8):
+            if board[i][j] != 0:
+                if board[i][j].color == 'white':
+                    if board[i][j].king == True:
+                        print('O', end="")
+                    else:    
+                        print('o', end="")
+                else:
+                    if board[i][j].king == True:
+                        print('X', end="")
+                    else:    
+                        print('x', end="")
+            else:
+                print('-', end="")
+        print('\n')
+
+if __name__ == '__main__': #########################################
+    player_dir='test_players/'
+    
+    
+    first_layer_hidden_weights = (32,90) #32,90
+    first_layer_hidden_bias = (1,90) #90
+    second_layer_hidden_weights = (90,40) #90,40 
+    second_layer_hidden_bias = (1,40) #40
+    third_layer_hidden_weights = (40,10) #40,10
+    third_layer_hidden_bias = (1,10) #10
+    
 
 # Create 30 players in the population to begin
 def create_players():
-    global player_count
+    global player_count, players
     for i in range (0, 30):
-        players.append(predict_move.evolutionary_player(player_dir=player_dir, player_count=player_count))
+        players.append(predict_move.evolutionary_player(player_count))
         player_count += 1
 
 
@@ -676,50 +453,221 @@ def score_players():
             while player1 == player2:
                 player2 = math.floor(random.random() * 30)
 
-            evolutionary_play(players[player1], players[player2])  
+        play_game(players[player1], players[player2])  
 
-def create_offspring():
-    
+def fogel_create_offspring():
+    global players
     # rank parents
     # sort players by score
     numbers_not_used = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29]
+    numbers_used = []
     hold_players = copy.deepcopy(players)
     
     for i in range(0,30):
         for j in range(0,29-i):
             if hold_players[i].score < hold_players[i+1].score:
                 hold_players[i], hold_players[i+1]  = hold_players[i+1], hold_players[i]
-                
-
-    for i in range(0,30):
-        print(hold_players[i].number)
-
-
-    parents = {}
+    
     for i in range(0, 15):
-        parents[hold_players[i].number] = hold_players[i]
+        numbers_used.append(hold_players[i].number)
         numbers_not_used.pop(numbers_not_used.index(hold_players[i].number)) #remove the numbers that are being used again as parents
-        
 
     # we need to create the offspring now
     i = 0
     for n in numbers_not_used:
-        players[n] = predict_move.fogel_create_offspring(player_dir=player_dir, parent_num = i, offspring_num = n)
+        predict_move.fogel_create_offspring( players[numbers_used[i]], players[n] )
+        i +=1
 
 
-#def one_point_crossover_ga():
+def one_point_w_mutation_create_offspring():
+    global players
+    # rank parents
+    # sort players by score
+    numbers_not_used = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29]
+    numbers_used = []
+    hold_players = copy.deepcopy(players)
     
-#    create_players()
-#    score_players()
-#    create_offspring()
+    for i in range(0,30):
+        for j in range(0,29-i):
+            if hold_players[i].score < hold_players[i+1].score:
+                hold_players[i], hold_players[i+1]  = hold_players[i+1], hold_players[i]
+    
+    for i in range(0, 15):
+        numbers_used.append(hold_players[i].number)
+        numbers_not_used.pop(numbers_not_used.index(hold_players[i].number)) #remove the numbers that are being used again as parents
+        
 
+    # we need to create the offspring now
+    for n in numbers_not_used:
+        #pick two random parents
+        player1 = math.floor(random.random() * 15)
+        player2 = math.floor(random.random() * 15)
+        while player1 == player2:
+            player2 = math.floor(random.random() * 15)
+        predict_move.one_point_w_mutation_create_offspring( players[numbers_used[player1]], players[numbers_used[player2]], players[n] )
+        
+
+def two_point_w_mutation_create_offspring():
+    global players
+    # rank parents
+    # sort players by score
+    numbers_not_used = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29]
+    numbers_used = []
+    hold_players = copy.deepcopy(players)
+    
+    for i in range(0,30):
+        for j in range(0,29-i):
+            if hold_players[i].score < hold_players[i+1].score:
+                hold_players[i], hold_players[i+1]  = hold_players[i+1], hold_players[i]
+    
+    for i in range(0, 15):
+        numbers_used.append(hold_players[i].number)
+        numbers_not_used.pop(numbers_not_used.index(hold_players[i].number)) #remove the numbers that are being used again as parents
+        
+
+    # we need to create the offspring now
+    for n in numbers_not_used:
+        #pick two random parents
+        player1 = math.floor(random.random() * 15)
+        player2 = math.floor(random.random() * 15)
+        while player1 == player2:
+            player2 = math.floor(random.random() * 15)
+        predict_move.two_point_w_mutation_create_offspring( players[numbers_used[player1]], players[numbers_used[player2]], players[n] )
+
+
+def average_w_mutation_create_offspring():
+    global players
+    # rank parents
+    # sort players by score
+    numbers_not_used = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29]
+    numbers_used = []
+    hold_players = copy.deepcopy(players)
+    
+    for i in range(0,30):
+        for j in range(0,29-i):
+            if hold_players[i].score < hold_players[i+1].score:
+                hold_players[i], hold_players[i+1]  = hold_players[i+1], hold_players[i]
+    
+    for i in range(0, 15):
+        numbers_used.append(hold_players[i].number)
+        numbers_not_used.pop(numbers_not_used.index(hold_players[i].number)) #remove the numbers that are being used again as parents
+        
+
+    # we need to create the offspring now
+    for n in numbers_not_used:
+        #pick two random parents
+        player1 = math.floor(random.random() * 15)
+        player2 = math.floor(random.random() * 15)
+        while player1 == player2:
+            player2 = math.floor(random.random() * 15)
+        predict_move.average_w_mutation_create_offspring( players[numbers_used[player1]], players[numbers_used[player2]], players[n] )
+
+def one_point_crossover_ga():
+    
+    print("Creating players")
+    create_players()
+    start_time = time.time()
+    print("Finished Creating players")
+    for i in range(100):
+        gen_start_time = time.time()
+        score_players()
+        print("--------------------------Finished scoring------------------------------------")
+        one_point_w_mutation_create_offspring()
+        gen_end_time = time.time() - gen_start_time
+        gen_end_time *= 1000
+        print('Calc time for generation was ' + str(gen_end_time) + ' seconds')
+
+    end_time = time.time() - start_time
+    end_time *= 1000 
+
+    print('End time for players was ' + str(end_time) + ' seconds')
+    k = 0
+    print('Saving players...')
+    for i in players:
+        np.savez('one_point_cross_w_mutation/player' + str(k), first_layer_weights = i.first_layer_weights, first_layer_bias = i.first_layer_bias, second_layer_weights = i.second_layer_weights, second_layer_bias = i.second_layer_bias, third_layer_weights = i.third_layer_weights, third_layer_bias = i.third_layer_bias)
+        k += 1
+
+def two_point_crossover_ga():
+    
+    print("Creating players")
+    create_players()
+    start_time = time.time()
+    print("Finished Creating players")
+    for i in range(100):
+        gen_start_time = time.time()
+        score_players()
+        print("--------------------------Finished scoring------------------------------------")
+        two_point_w_mutation_create_offspring()
+        gen_end_time = time.time() - gen_start_time
+        gen_end_time *= 1000
+        print('Calc time for generation was ' + str(gen_end_time) + ' seconds')
+
+    end_time = time.time() - start_time
+    end_time *= 1000 
+
+    print('End time for players was ' + str(end_time) + ' seconds')
+    k = 0
+    print('Saving players...')
+    for i in players:
+        np.savez('two_point_cross_w_mutation/player' + str(k), first_layer_weights = i.first_layer_weights, first_layer_bias = i.first_layer_bias, second_layer_weights = i.second_layer_weights, second_layer_bias = i.second_layer_bias, third_layer_weights = i.third_layer_weights, third_layer_bias = i.third_layer_bias)
+        k += 1
+
+def average_crossover_ga():
+    
+    print("Creating players")
+    create_players()
+    start_time = time.time()
+    print("Finished Creating players")
+    for i in range(100):
+        gen_start_time = time.time()
+        score_players()
+        print("--------------------------Finished scoring------------------------------------")
+        average_w_mutation_create_offspring()
+        gen_end_time = time.time() - gen_start_time
+        gen_end_time *= 1000
+        print('Calc time for generation was ' + str(gen_end_time) + ' seconds')
+
+    end_time = time.time() - start_time
+    end_time *= 1000 
+
+    print('End time for players was ' + str(end_time) + ' seconds')
+    k = 0
+    print('Saving players...')
+    for i in players:
+        np.savez('average_w_mutation/player' + str(k), first_layer_weights = i.first_layer_weights, first_layer_bias = i.first_layer_bias, second_layer_weights = i.second_layer_weights, second_layer_bias = i.second_layer_bias, third_layer_weights = i.third_layer_weights, third_layer_bias = i.third_layer_bias)
+        k += 1
    
 def fogel_ea():
 
+    print("Creating players")
     create_players()
-    for i in range(25):
-        #score_players()
-        create_offspring()
+    start_time = time.time()
+    print("Finished Creating players")
+    for i in range(100):
+        gen_start_time = time.time()
+        score_players()
+        print("--------------------------Finished scoring------------------------------------")
+        fogel_create_offspring()
+        gen_end_time = time.time() - gen_start_time
+        gen_end_time *= 1000
+        print('Calc time for generation was ' + str(gen_end_time) + ' seconds')
 
-fogel_ea()
+    end_time = time.time() - start_time
+    end_time *= 1000 
 
+    print('End time for players was ' + str(end_time) + ' seconds')
+    k = 0
+    print('Saving players...')
+    for i in players:
+        np.savez('fogel_players/fogel_player' + str(k), first_layer_weights = i.first_layer_weights, first_layer_bias = i.first_layer_bias, second_layer_weights = i.second_layer_weights, second_layer_bias = i.second_layer_bias, third_layer_weights = i.third_layer_weights, third_layer_bias = i.third_layer_bias)
+        k += 1
+
+#fogel_ea()
+#one_point_crossover_ga()
+two_point_crossover_ga()
+#average_crossover_ga()
+print('Done')
+
+
+    
+    
