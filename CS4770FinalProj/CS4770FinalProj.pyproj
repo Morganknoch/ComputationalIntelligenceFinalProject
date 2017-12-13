@@ -24,6 +24,9 @@
   <ItemGroup>
     <Compile Include="checkers.py" />
     <Compile Include="predict_move.py" />
+    <Compile Include="train.py">
+      <SubType>Code</SubType>
+    </Compile>
   </ItemGroup>
   <ItemGroup>
     <Content Include="board_init.csv" />
